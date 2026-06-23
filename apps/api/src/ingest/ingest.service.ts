@@ -1,15 +1,30 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import type { IngestShift, NormalizedEvent } from '@vouch/schema';
+import type { IngestRequest } from '@vouch/schema';
 import { PrismaService } from '../prisma/prisma.service';
 import { toJson } from '../common/json.util';
-import { normalizeFreeText, normalizeStructured } from './normalize';
+import {
+  normalizeFreeText,
+  splitStructuredByShift,
+  type StructuredShiftGroup,
+} from './normalize';
+
+export interface IngestedShift {
+  shiftId: string;
+  nightOf: string;
+  format: 'STRUCTURED' | 'FREE_TEXT';
+  events: number;
+}
 
 export interface IngestResult {
   hotelId: string;
-  shiftId: string;
-  nightOf: string;
-  sources: number;
-  events: number;
+  shifts: IngestedShift[];
+}
+
+function nextDay(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return dt.toISOString().slice(0, 10);
 }
 
 @Injectable()
@@ -19,85 +34,126 @@ export class IngestService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Ingest one shift: stores each source verbatim (RawLog) and the mechanical
-   * normalization (NormalizedEvent). Idempotent per (hotelId, nightOf) shift.
-   * Everything is scoped to hotelId (AGENTS.md §3.3).
+   * Ingest one or more sources. Structured sources derive their shift date(s)
+   * from event timestamps and may span several nights; free text needs an
+   * explicit nightOf. Everything is scoped to hotelId (AGENTS.md §3.3).
    */
-  async ingestShift(hotelId: string, input: IngestShift): Promise<IngestResult> {
-    // Scaffold: ensure the hotel exists. A real registry would carry name/rooms/tz.
+  async ingest(hotelId: string, input: IngestRequest): Promise<IngestResult> {
     await this.prisma.hotel.upsert({
       where: { id: hotelId },
       update: {},
       create: { id: hotelId, name: hotelId, rooms: 0, timezone: '+00:00' },
     });
 
-    const nightOf = new Date(input.nightOf);
-    const shift = await this.prisma.shift.upsert({
-      where: { hotelId_nightOf: { hotelId, nightOf } },
-      update: {
-        startsAt: new Date(input.startsAt),
-        endsAt: new Date(input.endsAt),
-      },
-      create: {
-        hotelId,
-        nightOf,
-        startsAt: new Date(input.startsAt),
-        endsAt: new Date(input.endsAt),
-      },
-    });
+    const shifts: IngestedShift[] = [];
 
-    let eventCount = 0;
     for (const source of input.sources) {
-      const rawLog = await this.prisma.rawLog.create({
-        data: {
+      if (source.format === 'STRUCTURED') {
+        let groups: StructuredShiftGroup[];
+        try {
+          groups = splitStructuredByShift(source.content);
+        } catch (e) {
+          throw new BadRequestException(
+            `Failed to parse STRUCTURED source: ${(e as Error).message}`,
+          );
+        }
+        for (const group of groups) {
+          const shift = await this.upsertShift(
+            hotelId,
+            group.nightOf,
+            new Date(group.startsAt),
+            new Date(group.endsAt),
+          );
+          const rawLog = await this.prisma.rawLog.create({
+            data: {
+              hotelId,
+              shiftId: shift.id,
+              format: 'STRUCTURED',
+              content: group.rawContent,
+            },
+          });
+          await this.persistEvents(hotelId, shift.id, rawLog.id, group.events);
+          shifts.push({
+            shiftId: shift.id,
+            nightOf: group.nightOf,
+            format: 'STRUCTURED',
+            events: group.events.length,
+          });
+        }
+      } else {
+        if (!input.nightOf) {
+          throw new BadRequestException(
+            'nightOf is required when a source is FREE_TEXT (prose carries no date).',
+          );
+        }
+        const nightOf = input.nightOf.slice(0, 10);
+        const shift = await this.upsertShift(
           hotelId,
-          shiftId: shift.id,
-          format: source.format,
-          content: source.content, // verbatim, UTF-8
-        },
-      });
-
-      let normalized: NormalizedEvent[];
-      try {
-        normalized =
-          source.format === 'STRUCTURED'
-            ? normalizeStructured(source.content)
-            : normalizeFreeText(source.content);
-      } catch (e) {
-        throw new BadRequestException(
-          `Failed to normalize ${source.format} source: ${(e as Error).message}`,
+          nightOf,
+          new Date(`${nightOf}T23:00:00Z`),
+          new Date(`${nextDay(nightOf)}T07:00:00Z`),
         );
-      }
-
-      for (const event of normalized) {
-        await this.prisma.normalizedEvent.create({
+        const rawLog = await this.prisma.rawLog.create({
           data: {
             hotelId,
             shiftId: shift.id,
-            rawLogId: rawLog.id,
-            sourceRef: event.sourceRef,
-            occurredAt: event.occurredAt ? new Date(event.occurredAt) : null,
-            room: event.room,
-            category: event.category,
-            text: event.text,
-            rawStatus: event.rawStatus,
-            flags: toJson(event.flags),
+            format: 'FREE_TEXT',
+            content: source.content, // verbatim, UTF-8
           },
         });
-        eventCount += 1;
+        const events = normalizeFreeText(source.content, nightOf);
+        await this.persistEvents(hotelId, shift.id, rawLog.id, events);
+        shifts.push({
+          shiftId: shift.id,
+          nightOf,
+          format: 'FREE_TEXT',
+          events: events.length,
+        });
       }
     }
 
     this.logger.log(
-      `Ingested hotel=${hotelId} shift=${shift.id} sources=${input.sources.length} events=${eventCount}`,
+      `Ingested hotel=${hotelId} shifts=${shifts.length} ` +
+        `events=${shifts.reduce((n, s) => n + s.events, 0)}`,
     );
+    return { hotelId, shifts };
+  }
 
-    return {
-      hotelId,
-      shiftId: shift.id,
-      nightOf: input.nightOf,
-      sources: input.sources.length,
-      events: eventCount,
-    };
+  private async upsertShift(
+    hotelId: string,
+    nightOf: string,
+    startsAt: Date,
+    endsAt: Date,
+  ) {
+    const nightOfDate = new Date(`${nightOf}T00:00:00Z`);
+    return this.prisma.shift.upsert({
+      where: { hotelId_nightOf: { hotelId, nightOf: nightOfDate } },
+      update: { startsAt, endsAt },
+      create: { hotelId, nightOf: nightOfDate, startsAt, endsAt },
+    });
+  }
+
+  private async persistEvents(
+    hotelId: string,
+    shiftId: string,
+    rawLogId: string,
+    events: { sourceRef: string; occurredAt: string | null; room: string | null; category: string; text: string; rawStatus: string | null; flags: string[] }[],
+  ) {
+    for (const event of events) {
+      await this.prisma.normalizedEvent.create({
+        data: {
+          hotelId,
+          shiftId,
+          rawLogId,
+          sourceRef: event.sourceRef,
+          occurredAt: event.occurredAt ? new Date(event.occurredAt) : null,
+          room: event.room,
+          category: event.category,
+          text: event.text,
+          rawStatus: event.rawStatus,
+          flags: toJson(event.flags),
+        },
+      });
+    }
   }
 }

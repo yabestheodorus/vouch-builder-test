@@ -1,8 +1,10 @@
-// Seed the running API with the sample week, split into night shifts so
-// reconciliation builds up across nights. Generates a handover after each shift.
+// Seed the running API with the sample week. Structured JSON is ingested in one
+// call and auto-split into night shifts by the API; the free-text night is added
+// separately. Then a handover is generated per shift in date order so the
+// open-issue thread builds across nights.
 //
 // Usage (API must be running):
-//   node apps/api/scripts/seed.mjs            # default hotel lumen-sg, API :3001
+//   node apps/api/scripts/seed.mjs
 //   API_BASE=http://localhost:3001 HOTEL_ID=lumen-sg node apps/api/scripts/seed.mjs
 
 import { readFileSync } from 'node:fs';
@@ -13,36 +15,8 @@ const BASE = process.env.API_BASE ?? 'http://localhost:3001';
 const HOTEL = process.env.HOTEL_ID ?? 'lumen-sg';
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'data');
 
-const events = JSON.parse(readFileSync(join(dataDir, 'events.json'), 'utf8')).events;
+const eventsJson = readFileSync(join(dataDir, 'events.json'), 'utf8');
 const nightLogs = readFileSync(join(dataDir, 'night-logs.md'), 'utf8');
-
-// A shift runs D 23:00 -> D+1 07:00, so events before 07:00 belong to date D-1.
-function prevDay(d) {
-  const [y, m, day] = d.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, day));
-  dt.setUTCDate(dt.getUTCDate() - 1);
-  return dt.toISOString().slice(0, 10);
-}
-function nightOfFor(ts) {
-  const date = ts.slice(0, 10);
-  const hour = Number(ts.slice(11, 13));
-  return hour < 7 ? prevDay(date) : date;
-}
-
-const byNight = new Map();
-for (const e of events) {
-  const n = nightOfFor(e.timestamp);
-  if (!byNight.has(n)) byNight.set(n, []);
-  byNight.get(n).push(e);
-}
-
-const shifts = [];
-for (const [nightOf, evs] of byNight) {
-  shifts.push({ nightOf, format: 'STRUCTURED', content: JSON.stringify({ events: evs }) });
-}
-// The one night logged as free text (system was down): Wed 27 -> Thu 28.
-shifts.push({ nightOf: '2026-05-27', format: 'FREE_TEXT', content: nightLogs });
-shifts.sort((a, b) => a.nightOf.localeCompare(b.nightOf));
 
 async function post(path, body) {
   const res = await fetch(`${BASE}${path}`, {
@@ -55,18 +29,28 @@ async function post(path, body) {
   return json;
 }
 
+// Structured: one call, the API derives and splits the shifts by timestamp.
+const structured = await post('/ingest', {
+  hotelId: HOTEL,
+  sources: [{ format: 'STRUCTURED', content: eventsJson }],
+});
+
+// Free text: the one night the system was down (Wed 27 -> Thu 28).
+const freeText = await post('/ingest', {
+  hotelId: HOTEL,
+  nightOf: '2026-05-27',
+  sources: [{ format: 'FREE_TEXT', content: nightLogs }],
+});
+
+const shifts = [...structured.shifts, ...freeText.shifts].sort((a, b) =>
+  a.nightOf.localeCompare(b.nightOf),
+);
+
 for (const s of shifts) {
-  const ing = await post('/ingest', {
-    hotelId: HOTEL,
-    nightOf: s.nightOf,
-    startsAt: `${s.nightOf}T23:00:00+08:00`,
-    endsAt: `${s.nightOf}T07:00:00+08:00`,
-    sources: [{ format: s.format, content: s.content }],
-  });
-  const h = await post(`/hotels/${HOTEL}/handover`, { shiftId: ing.shiftId });
+  const h = await post(`/hotels/${HOTEL}/handover`, { shiftId: s.shiftId });
   const tag = (t) => h.items.filter((i) => i.reconcileTag === t).length;
   console.log(
-    `night ${s.nightOf} [${s.format.padEnd(10)}] events=${String(ing.events).padStart(2)} -> ` +
+    `night ${s.nightOf} [${s.format.padEnd(10)}] events=${String(s.events).padStart(2)} -> ` +
       `items=${h.items.length} (new=${tag('NEW')} still=${tag('STILL_OPEN')} resolved=${tag('NEWLY_RESOLVED')})`,
   );
 }

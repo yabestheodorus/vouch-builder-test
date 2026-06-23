@@ -17,6 +17,12 @@ export const HandoverItemSchema = z.object({
    */
   issueId: z.string().nullable().default(null),
   text: z.string().min(1),
+  /**
+   * One short sentence on why this item is where it is: why this bucket, why
+   * this reconcile tag, and what in the sources supports it. Per-item grounding
+   * the operator (and debugger) can read at a glance.
+   */
+  why: z.string().min(1),
   sourceRefs: z.array(SourceRef).min(1, 'every statement must cite a source'),
   flags: z.array(GroundingFlag).default([]),
 });

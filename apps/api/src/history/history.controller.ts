@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Delete, Get, Param } from '@nestjs/common';
 import { HistoryService } from './history.service';
 
 @Controller('hotels/:hotelId')
@@ -23,5 +23,11 @@ export class HistoryController {
   @Get('generation-logs')
   listGenerationLogs(@Param('hotelId') hotelId: string) {
     return this.history.listGenerationLogs(hotelId);
+  }
+
+  /** Wipe all data for this hotel so the flow can be re-run from scratch. */
+  @Delete('data')
+  clearData(@Param('hotelId') hotelId: string) {
+    return this.history.clearHotelData(hotelId);
   }
 }

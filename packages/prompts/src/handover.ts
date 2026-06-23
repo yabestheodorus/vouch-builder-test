@@ -46,6 +46,7 @@ Return ONLY a JSON object with this exact shape (no markdown, no prose around it
       "reconcileTag": "NEW" | "STILL_OPEN" | "NEWLY_RESOLVED",
       "issueId": string | null, // for STILL_OPEN/NEWLY_RESOLVED: the matching openIssues[].id; null for NEW
       "text": string,
+      "why": string,            // one sentence: why this bucket + tag, and what in the sources supports it
       "sourceRefs": string[],   // ids from the DATA this statement is based on
       "flags": ("incomplete" | "contradiction" | "unverified" | "injection_attempt")[]
     }
@@ -86,8 +87,12 @@ RULES — follow all of them:
 6. Preserve the original language when quoting. Do not present an invented or
    uncertain translation as fact.
 
-7. Keep "reasoning" short and concrete — it is read by engineers debugging a bad
-   handover, not by the manager.`;
+7. Each item needs a one-sentence "why": why it is in this bucket, why this
+   reconcile tag, and what in the cited sources supports it. Keep it concrete and
+   tied to the data — never restate the text.
+
+8. Keep the top-level "reasoning" short and concrete — it is read by engineers
+   debugging a bad handover, not by the manager.`;
 
 /**
  * Build the messages for a handover generation. The hotel's data is injected

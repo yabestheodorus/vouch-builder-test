@@ -118,6 +118,7 @@ export class HandoverGeneratorService {
         reconcileTag: 'STILL_OPEN',
         issueId: issue.id,
         text: `Carried-over open issue: ${issue.title}`,
+        why: 'Passed through from stored open-issue state; model not applied.',
         sourceRefs: issue.sourceRefs.length > 0 ? issue.sourceRefs : [issue.id],
         flags: ['unverified'],
       });
@@ -128,6 +129,7 @@ export class HandoverGeneratorService {
         reconcileTag: 'NEW',
         issueId: null,
         text: event.text,
+        why: 'Raw shift event passed through verbatim; model not applied.',
         sourceRefs: [event.sourceRef],
         flags: ['unverified'],
       });

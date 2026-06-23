@@ -7,6 +7,7 @@ import { HandoverGeneratorService } from '../llm/handover-generator.service';
 import { GenerationLogService } from '../logging/generation-log.service';
 import { mapEventRow } from '../common/mappers';
 import { parseStringArray, toJson, unique } from '../common/json.util';
+import { resolveSources } from '../common/sources';
 
 /**
  * Orchestrates one generate-handover run end-to-end, scoped to a hotel:
@@ -75,6 +76,7 @@ export class HandoverService {
             issueId: item.issueId,
             reconcileTag: item.reconcileTag,
             text: item.text,
+            why: item.why,
             sourceRefs: toJson(item.sourceRefs),
             flags: toJson(item.flags),
           })),
@@ -104,7 +106,22 @@ export class HandoverService {
     return this.render(handover);
   }
 
-  /** Drop issueIds the model invented or borrowed from another hotel. */
+  /** Resolve every cited ref in a handover to its raw source text. */
+  private async withSources(handover: {
+    items: Array<{ sourceRefs: string }>;
+    hotelId: string;
+  }) {
+    const refs = handover.items.flatMap((i) => parseStringArray(i.sourceRefs));
+    return resolveSources(this.prisma, handover.hotelId, refs);
+  }
+
+  /**
+   * Deterministic guardrails applied to model output before it is persisted:
+   *  - Drop issueIds the model invented or borrowed from another hotel.
+   *  - Force any injection_attempt item to FYI: a manipulation attempt embedded
+   *    in the data is informational, never an action item, whatever bucket the
+   *    model chose. This is a safety boundary, not a style preference.
+   */
   private sanitizeIssueRefs(
     draft: HandoverDraft,
     validIds: Set<string>,
@@ -112,19 +129,23 @@ export class HandoverService {
     return {
       ...draft,
       items: draft.items.map((item) => {
-        if (item.issueId && !validIds.has(item.issueId)) {
-          return {
-            ...item,
+        let next = item;
+        if (next.issueId && !validIds.has(next.issueId)) {
+          next = {
+            ...next,
             issueId: null,
-            flags: unique([...item.flags, 'unverified']),
+            flags: unique([...next.flags, 'unverified']),
           };
         }
-        return item;
+        if (next.flags.includes('injection_attempt') && next.bucket !== 'FYI') {
+          next = { ...next, bucket: 'FYI' };
+        }
+        return next;
       }),
     };
   }
 
-  private render(handover: {
+  private async render(handover: {
     id: string;
     hotelId: string;
     shiftId: string;
@@ -138,10 +159,12 @@ export class HandoverService {
       reconcileTag: string;
       issueId: string | null;
       text: string;
+      why: string;
       sourceRefs: string;
       flags: string;
     }>;
   }) {
+    const sources = await this.withSources(handover);
     return {
       id: handover.id,
       hotelId: handover.hotelId,
@@ -156,9 +179,12 @@ export class HandoverService {
         reconcileTag: item.reconcileTag,
         issueId: item.issueId,
         text: item.text,
+        why: item.why,
         sourceRefs: parseStringArray(item.sourceRefs),
         flags: parseStringArray(item.flags),
       })),
+      // ref -> { text, room, occurredAt, format, ... } for clickable citations
+      sources,
     };
   }
 }

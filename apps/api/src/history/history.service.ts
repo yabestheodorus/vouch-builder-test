@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseJsonObject, parseStringArray } from '../common/json.util';
+import { resolveSources } from '../common/sources';
 
 /**
  * Read models for the three frontend menus, all scoped per hotel (AGENTS.md §5):
@@ -33,6 +34,8 @@ export class HistoryService {
       include: { items: true },
     });
     if (!handover) throw new NotFoundException(`Handover ${id} not found`);
+    const refs = handover.items.flatMap((i) => parseStringArray(i.sourceRefs));
+    const sources = await resolveSources(this.prisma, hotelId, refs);
     return {
       id: handover.id,
       hotelId: handover.hotelId,
@@ -47,10 +50,29 @@ export class HistoryService {
         reconcileTag: item.reconcileTag,
         issueId: item.issueId,
         text: item.text,
+        why: item.why,
         sourceRefs: parseStringArray(item.sourceRefs),
         flags: parseStringArray(item.flags),
       })),
+      // ref -> raw source text, so the UI can make every citation clickable.
+      sources,
     };
+  }
+
+  /**
+   * Wipe all operational data for one hotel (keeps the Hotel row) so an operator
+   * can re-run the whole flow from scratch. Strictly hotel-scoped.
+   */
+  async clearHotelData(hotelId: string): Promise<{ hotelId: string; cleared: true }> {
+    // Order respects foreign keys: children before parents.
+    await this.prisma.handoverItem.deleteMany({ where: { hotelId } });
+    await this.prisma.generationLog.deleteMany({ where: { hotelId } });
+    await this.prisma.handover.deleteMany({ where: { hotelId } });
+    await this.prisma.issue.deleteMany({ where: { hotelId } });
+    await this.prisma.normalizedEvent.deleteMany({ where: { hotelId } });
+    await this.prisma.rawLog.deleteMany({ where: { hotelId } });
+    await this.prisma.shift.deleteMany({ where: { hotelId } });
+    return { hotelId, cleared: true };
   }
 
   async listRawLogs(hotelId: string) {

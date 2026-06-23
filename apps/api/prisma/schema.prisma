@@ -152,6 +152,7 @@ model HandoverItem {
   issueId      String? // link to the reconciliation thread
   reconcileTag String // NEW | STILL_OPEN | NEWLY_RESOLVED
   text         String
+  why          String  @default("") // one-sentence per-item grounding/justification
   sourceRefs   String  @default("[]") // JSON array, required non-empty in app layer
   flags        String  @default("[]") // contradiction | incomplete | unverified | ...
 
