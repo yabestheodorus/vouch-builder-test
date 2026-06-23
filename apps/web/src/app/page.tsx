@@ -83,15 +83,20 @@ export default function Home() {
     }
   }
 
-  async function clearData() {
-    if (!confirm(`Clear ALL data for hotel "${hotelId}"? This cannot be undone.`)) {
+  async function resetAndSeed() {
+    if (
+      !confirm(
+        `Clear ALL data for hotel "${hotelId}" and reload the sample week?\n` +
+          `This wipes existing data and generates a fresh handover per night.`,
+      )
+    ) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await api.clearHotel(hotelId);
       setHandover(null);
+      await api.reseed(hotelId); // clears + ingests sample + generates per shift
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -120,12 +125,13 @@ export default function Home() {
           <Button variant="secondary" onClick={() => setHotelId(hotelInput.trim())}>
             Load
           </Button>
-          <Button variant="destructive" onClick={clearData} disabled={busy}>
-            Clear data
+          <Button variant="destructive" onClick={resetAndSeed} disabled={busy}>
+            {busy ? 'Resetting…' : 'Reset & seed sample'}
           </Button>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Test the flow yourself: Clear data → Ingest a shift → Generate handover.
+          Reset &amp; seed wipes this hotel and reloads the sample week (a handover
+          per night). Or ingest your own shift in the Ingest tab.
         </p>
         {error && (
           <p className="mt-2 rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700">

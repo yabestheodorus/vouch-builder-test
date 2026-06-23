@@ -7,6 +7,7 @@ import { LoggingModule } from './logging/logging.module';
 import { IngestModule } from './ingest/ingest.module';
 import { HandoverModule } from './handover/handover.module';
 import { HistoryModule } from './history/history.module';
+import { SeedModule } from './seed/seed.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { HistoryModule } from './history/history.module';
     IngestModule,
     HandoverModule,
     HistoryModule,
+    SeedModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -8,5 +8,6 @@ import { HandoverService } from './handover.service';
   imports: [LlmModule, ReconcileModule],
   controllers: [HandoverController],
   providers: [HandoverService],
+  exports: [HandoverService],
 })
 export class HandoverModule {}

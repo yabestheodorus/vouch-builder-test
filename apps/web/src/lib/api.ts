@@ -138,4 +138,9 @@ export const api = {
       `/hotels/${encodeURIComponent(hotelId)}/data`,
       { method: 'DELETE' },
     ),
+  reseed: (hotelId: string) =>
+    http<{ hotelId: string; shifts: number; handovers: Array<{ nightOf: string; items: number }> }>(
+      `/hotels/${encodeURIComponent(hotelId)}/seed`,
+      { method: 'POST' },
+    ),
 };
