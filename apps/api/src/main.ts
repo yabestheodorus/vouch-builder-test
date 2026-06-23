@@ -1,3 +1,4 @@
+import 'dotenv/config'; // load .env before any provider constructor reads process.env
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
