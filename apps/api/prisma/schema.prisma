@@ -1,0 +1,188 @@
+// Prisma schema for vouch-frontdesk-hotel-log
+// Model mirrors docs/db-schema.md. See AGENTS.md for the rules it serves:
+// per-hotel isolation, reconciliation across nights, grounding, structured logging.
+//
+// SQLite has no native enum or JSON types, so:
+//   - "enum" fields are String with the allowed values noted in a comment and
+//     enforced by Zod in the application layer (packages/schema).
+//   - "JSON" fields are String holding a JSON-serialized value (default "[]"/"{}").
+// All text is UTF-8; never down-convert (logs may be in any language).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "cjs" // NestJS compiles to CommonJS; avoid ESM-only import.meta
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// The tenant boundary. Every operational row scopes by hotelId.
+model Hotel {
+  id        String   @id
+  name      String
+  rooms     Int
+  timezone  String // e.g. "+08:00"; shift dates resolved here
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shifts         Shift[]
+  rawLogs        RawLog[]
+  events         NormalizedEvent[]
+  issues         Issue[]
+  handovers      Handover[]
+  handoverItems  HandoverItem[]
+  generationLogs GenerationLog[]
+}
+
+/// One night shift (~23:00-07:00), spanning two calendar dates.
+/// The unit of "which night" for logging and reconciliation.
+model Shift {
+  id        String   @id @default(cuid())
+  hotelId   String
+  nightOf   DateTime // business date the shift started (anchor)
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+
+  hotel           Hotel             @relation(fields: [hotelId], references: [id])
+  rawLogs         RawLog[]
+  events          NormalizedEvent[]
+  handovers       Handover[]
+  generationLogs  GenerationLog[]
+  issuesFirstSeen Issue[]           @relation("IssueFirstSeen")
+  issuesLastSeen  Issue[]           @relation("IssueLastSeen")
+  issuesResolved  Issue[]           @relation("IssueResolved")
+
+  @@unique([hotelId, nightOf])
+  @@index([hotelId])
+}
+
+/// The original ingested input for a shift, stored verbatim.
+model RawLog {
+  id         String   @id @default(cuid())
+  hotelId    String
+  shiftId    String
+  format     String // STRUCTURED | FREE_TEXT
+  content    String // raw JSON string or raw prose, UTF-8, untouched
+  receivedAt DateTime @default(now())
+
+  hotel  Hotel             @relation(fields: [hotelId], references: [id])
+  shift  Shift             @relation(fields: [shiftId], references: [id])
+  events NormalizedEvent[]
+
+  @@index([hotelId, shiftId])
+}
+
+/// Each source item normalized to a common shape, keeping its origin.
+/// This is the grounding anchor: sourceRef is required.
+model NormalizedEvent {
+  id         String    @id @default(cuid())
+  hotelId    String
+  shiftId    String
+  rawLogId   String
+  sourceRef  String // event id (e.g. "evt_0008") or "freetext:L17"
+  occurredAt DateTime? // null if free text gives no time
+  room       String?
+  category   String // normalized category
+  text       String // normalized description, original language preserved
+  rawStatus  String? // status as stated in source, if any
+  flags      String    @default("[]") // JSON array: incomplete|contradiction|unverified|injection_attempt
+
+  hotel  Hotel  @relation(fields: [hotelId], references: [id])
+  shift  Shift  @relation(fields: [shiftId], references: [id])
+  rawLog RawLog @relation(fields: [rawLogId], references: [id])
+
+  @@index([hotelId, shiftId])
+}
+
+/// Durable, mutable, per-hotel open-issue thread carried across nights.
+/// All reconciliation queries filter by hotelId.
+model Issue {
+  id               String   @id @default(cuid())
+  hotelId          String
+  status           String   @default("OPEN") // OPEN | RESOLVED
+  category         String
+  title            String // short stable label for the thread
+  room             String?
+  firstSeenShiftId String
+  lastSeenShiftId  String
+  resolvedShiftId  String? // null until resolved
+  sourceRefs       String   @default("[]") // JSON array of NormalizedEvent sourceRefs
+  flags            String   @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  hotel          Hotel          @relation(fields: [hotelId], references: [id])
+  firstSeenShift Shift          @relation("IssueFirstSeen", fields: [firstSeenShiftId], references: [id])
+  lastSeenShift  Shift          @relation("IssueLastSeen", fields: [lastSeenShiftId], references: [id])
+  resolvedShift  Shift?         @relation("IssueResolved", fields: [resolvedShiftId], references: [id])
+  items          HandoverItem[]
+
+  @@index([hotelId, status])
+}
+
+/// One generated handover output per generate-handover run. Immutable.
+model Handover {
+  id            String   @id @default(cuid())
+  hotelId       String
+  shiftId       String
+  generatedAt   DateTime @default(now())
+  model         String // Groq model id
+  promptVersion String // ties output to exact prompt
+  summary       String? // optional one-line top-line
+
+  hotel         Hotel          @relation(fields: [hotelId], references: [id])
+  shift         Shift          @relation(fields: [shiftId], references: [id])
+  items         HandoverItem[]
+  generationLog GenerationLog?
+
+  @@index([hotelId, generatedAt])
+}
+
+/// Individual handover bullets, bucketed action-first.
+/// Every item cites its sources (sourceRefs non-empty, enforced in app layer).
+model HandoverItem {
+  id           String  @id @default(cuid())
+  handoverId   String
+  hotelId      String // denormalized for scoped queries
+  bucket       String // ON_FIRE | PENDING | FYI
+  issueId      String? // link to the reconciliation thread
+  reconcileTag String // NEW | STILL_OPEN | NEWLY_RESOLVED
+  text         String
+  sourceRefs   String  @default("[]") // JSON array, required non-empty in app layer
+  flags        String  @default("[]") // contradiction | incomplete | unverified | ...
+
+  handover Handover @relation(fields: [handoverId], references: [id])
+  hotel    Hotel    @relation(fields: [hotelId], references: [id])
+  issue    Issue?   @relation(fields: [issueId], references: [id])
+
+  @@index([handoverId])
+  @@index([hotelId])
+}
+
+/// Structured run log for production debuggability. One row per run.
+model GenerationLog {
+  id            String   @id @default(cuid())
+  hotelId       String
+  shiftId       String?
+  handoverId    String?  @unique // null if the run failed before save
+  startedAt     DateTime @default(now())
+  durationMs    Int
+  model         String
+  promptVersion String
+  inputCounts   String   @default("{}") // JSON: { events, freeTextLines, openIssuesIn }
+  reasoning     String // why the model produced this output
+  flags         String   @default("[]") // grounding flags raised this run
+  tokenUsage    String? // JSON: prompt/completion tokens
+  outcome       String // OK | REPAIRED | DEGRADED | FAILED
+  error         String? // message + repair trail if any
+
+  hotel    Hotel     @relation(fields: [hotelId], references: [id])
+  shift    Shift?    @relation(fields: [shiftId], references: [id])
+  handover Handover? @relation(fields: [handoverId], references: [id])
+
+  @@index([hotelId, startedAt])
+}
