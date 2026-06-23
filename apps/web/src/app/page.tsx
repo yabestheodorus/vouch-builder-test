@@ -1,65 +1,231 @@
-import Image from "next/image";
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import {
+  api,
+  type GenerationLog,
+  type Handover,
+  type HandoverSummary,
+  type RawLog,
+} from '@/lib/api';
+import { HandoverView } from '@/components/handover-view';
+import { IngestPanel } from '@/components/ingest-panel';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
+const OUTCOME_VARIANT: Record<
+  GenerationLog['outcome'],
+  'default' | 'secondary' | 'destructive' | 'outline'
+> = {
+  OK: 'default',
+  REPAIRED: 'secondary',
+  DEGRADED: 'outline',
+  FAILED: 'destructive',
+};
 
 export default function Home() {
+  const [hotelId, setHotelId] = useState('lumen-sg');
+  const [hotelInput, setHotelInput] = useState('lumen-sg');
+
+  const [handover, setHandover] = useState<Handover | null>(null);
+  const [handovers, setHandovers] = useState<HandoverSummary[]>([]);
+  const [rawLogs, setRawLogs] = useState<RawLog[]>([]);
+  const [genLogs, setGenLogs] = useState<GenerationLog[]>([]);
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const [hs, rl, gl] = await Promise.all([
+        api.listHandovers(hotelId),
+        api.listRawLogs(hotelId),
+        api.listGenerationLogs(hotelId),
+      ]);
+      setHandovers(hs);
+      setRawLogs(rl);
+      setGenLogs(gl);
+      if (hs.length > 0) {
+        setHandover(await api.getHandover(hotelId, hs[0].id));
+      } else {
+        setHandover(null);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [hotelId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function generate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const h = await api.generateHandover(hotelId);
+      setHandover(h);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openHandover(id: string) {
+    try {
+      setHandover(await api.getHandover(hotelId, id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <main className="mx-auto w-full max-w-4xl flex-1 p-6">
+      <header className="mb-6">
+        <h1 className="text-xl font-semibold">Night-Shift Handover</h1>
+        <p className="text-sm text-muted-foreground">
+          Action-first morning handover, grounded in the night team&apos;s logs.
+        </p>
+        <div className="mt-3 flex items-end gap-2">
+          <label className="text-sm">
+            <span className="mb-1 block text-muted-foreground">Hotel ID</span>
+            <input
+              value={hotelInput}
+              onChange={(e) => setHotelInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && setHotelId(hotelInput.trim())}
+              className="rounded-md border bg-background px-2 py-1"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </label>
+          <Button variant="secondary" onClick={() => setHotelId(hotelInput.trim())}>
+            Load
+          </Button>
         </div>
-      </main>
-    </div>
+        {error && (
+          <p className="mt-2 rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+      </header>
+
+      <Tabs defaultValue="handover">
+        <TabsList>
+          <TabsTrigger value="handover">Handover</TabsTrigger>
+          <TabsTrigger value="history">History ({handovers.length})</TabsTrigger>
+          <TabsTrigger value="raw">Raw logs ({rawLogs.length})</TabsTrigger>
+          <TabsTrigger value="runs">Run logs ({genLogs.length})</TabsTrigger>
+          <TabsTrigger value="ingest">Ingest</TabsTrigger>
+        </TabsList>
+
+        {/* Action-first handover */}
+        <TabsContent value="handover" className="mt-4 space-y-4">
+          <Button onClick={generate} disabled={busy}>
+            {busy ? 'Generating…' : 'Generate handover (latest shift)'}
+          </Button>
+          {handover ? (
+            <HandoverView handover={handover} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No handover yet. Ingest a shift, then generate.
+            </p>
+          )}
+        </TabsContent>
+
+        {/* Handover history */}
+        <TabsContent value="history" className="mt-4">
+          {handovers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No handovers yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {handovers.map((h) => (
+                <li key={h.id}>
+                  <button
+                    onClick={() => openHandover(h.id)}
+                    className="w-full rounded-md border p-3 text-left text-sm hover:bg-muted"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">
+                        {h.summary ?? '(no summary)'}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(h.generatedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {h.itemCount} items · model {h.model} · prompt {h.promptVersion}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </TabsContent>
+
+        {/* Raw shift logs */}
+        <TabsContent value="raw" className="mt-4">
+          {rawLogs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No raw logs yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {rawLogs.map((r) => (
+                <li key={r.id} className="rounded-md border p-3">
+                  <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline">{r.format}</Badge>
+                    <span>night of {new Date(r.nightOf).toLocaleDateString()}</span>
+                    <span>· {new Date(r.receivedAt).toLocaleString()}</span>
+                  </div>
+                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-xs">
+                    {r.content}
+                  </pre>
+                </li>
+              ))}
+            </ul>
+          )}
+        </TabsContent>
+
+        {/* Generation (run) logs */}
+        <TabsContent value="runs" className="mt-4">
+          {genLogs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No runs yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {genLogs.map((g) => (
+                <li key={g.id} className="rounded-md border p-3 text-sm">
+                  <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant={OUTCOME_VARIANT[g.outcome]}>{g.outcome}</Badge>
+                    <span>{new Date(g.startedAt).toLocaleString()}</span>
+                    <span>· {g.durationMs}ms · model {g.model} · prompt {g.promptVersion}</span>
+                    {g.inputCounts && (
+                      <span>
+                        · {g.inputCounts.events} events, {g.inputCounts.openIssuesIn} open issues
+                      </span>
+                    )}
+                  </div>
+                  <p className="whitespace-pre-wrap">{g.reasoning}</p>
+                  {g.flags.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {g.flags.map((f) => (
+                        <Badge key={f} variant="outline" className="font-normal">
+                          {f}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {g.error && <p className="mt-1 text-xs text-red-600">{g.error}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </TabsContent>
+
+        {/* Ingest */}
+        <TabsContent value="ingest" className="mt-4">
+          <IngestPanel hotelId={hotelId} onIngested={load} />
+        </TabsContent>
+      </Tabs>
+    </main>
   );
 }
