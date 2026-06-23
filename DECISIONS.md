@@ -65,9 +65,9 @@ One thing I learned quickly is that model output is not reliable enough to use w
 
 ## 5. What I'd do in hours 3–6
 
-* fdd# DECISIONS.md
+Add a preprocessing layer that compresses logs into structured, decision-safe facts. This step only removes narrative noise and redundant wording — it does NOT remove or change any meaningful information (e.g. status, room, issue type, or outcome are always preserved).
 
-A service that turns a hotel night team's raw shift logs (structured JSON and/or free-text, in any language) into an action-first morning handover: **On fire / Pending / FYI**.
+Reduce prompt size by deduplicating and filtering only non-relevant or repeated entries per night, while still passing all open issues and all same-night events that could affect reconciliation. All sourceRefs are preserved to ensure grounding and prevent loss of traceability.
 
 ## Stack — and why
 
