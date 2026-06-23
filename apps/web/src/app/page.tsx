@@ -83,6 +83,23 @@ export default function Home() {
     }
   }
 
+  async function clearData() {
+    if (!confirm(`Clear ALL data for hotel "${hotelId}"? This cannot be undone.`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.clearHotel(hotelId);
+      setHandover(null);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 p-6">
       <header className="mb-6">
@@ -103,7 +120,13 @@ export default function Home() {
           <Button variant="secondary" onClick={() => setHotelId(hotelInput.trim())}>
             Load
           </Button>
+          <Button variant="destructive" onClick={clearData} disabled={busy}>
+            Clear data
+          </Button>
         </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Test the flow yourself: Clear data → Ingest a shift → Generate handover.
+        </p>
         {error && (
           <p className="mt-2 rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700">
             {error}
@@ -113,15 +136,19 @@ export default function Home() {
 
       <Tabs defaultValue="handover">
         <TabsList>
-          <TabsTrigger value="handover">Handover</TabsTrigger>
-          <TabsTrigger value="history">History ({handovers.length})</TabsTrigger>
-          <TabsTrigger value="raw">Raw logs ({rawLogs.length})</TabsTrigger>
-          <TabsTrigger value="runs">Run logs ({genLogs.length})</TabsTrigger>
+          <TabsTrigger value="handover">Latest handover</TabsTrigger>
+          <TabsTrigger value="history">Past handovers ({handovers.length})</TabsTrigger>
+          <TabsTrigger value="raw">Night logs ({rawLogs.length})</TabsTrigger>
+          <TabsTrigger value="runs">Generation logs ({genLogs.length})</TabsTrigger>
           <TabsTrigger value="ingest">Ingest</TabsTrigger>
         </TabsList>
 
         {/* Action-first handover */}
         <TabsContent value="handover" className="mt-4 space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The action-first handover for the most recent shift. Click any source
+            ref to see the raw text it&apos;s grounded in.
+          </p>
           <Button onClick={generate} disabled={busy}>
             {busy ? 'Generating…' : 'Generate handover (latest shift)'}
           </Button>
@@ -135,7 +162,10 @@ export default function Home() {
         </TabsContent>
 
         {/* Handover history */}
-        <TabsContent value="history" className="mt-4">
+        <TabsContent value="history" className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Every handover generated for this hotel, newest first. Click one to open it.
+          </p>
           {handovers.length === 0 ? (
             <p className="text-sm text-muted-foreground">No handovers yet.</p>
           ) : (
@@ -165,7 +195,11 @@ export default function Home() {
         </TabsContent>
 
         {/* Raw shift logs */}
-        <TabsContent value="raw" className="mt-4">
+        <TabsContent value="raw" className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            The original night-shift input as ingested (structured JSON or
+            free-text prose), stored verbatim per shift.
+          </p>
           {rawLogs.length === 0 ? (
             <p className="text-sm text-muted-foreground">No raw logs yet.</p>
           ) : (
@@ -187,7 +221,12 @@ export default function Home() {
         </TabsContent>
 
         {/* Generation (run) logs */}
-        <TabsContent value="runs" className="mt-4">
+        <TabsContent value="runs" className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            One record per generation run, for debugging: which night, the model
+            &amp; prompt version, inputs seen, the model&apos;s reasoning, any
+            grounding flags, and the outcome (OK / repaired / degraded / failed).
+          </p>
           {genLogs.length === 0 ? (
             <p className="text-sm text-muted-foreground">No runs yet.</p>
           ) : (
@@ -222,7 +261,11 @@ export default function Home() {
         </TabsContent>
 
         {/* Ingest */}
-        <TabsContent value="ingest" className="mt-4">
+        <TabsContent value="ingest" className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Add a night&apos;s log as data. Structured JSON derives its date(s)
+            from event timestamps; free text needs a night date.
+          </p>
           <IngestPanel hotelId={hotelId} onIngested={load} />
         </TabsContent>
       </Tabs>

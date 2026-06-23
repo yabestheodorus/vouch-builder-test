@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 
 /**
  * Minimal ingest form so the app is usable without curl. Input is data: paste
- * structured JSON or free-text prose for one shift. Mirrors POST /ingest.
+ * structured JSON or free-text prose. STRUCTURED derives its date(s) from the
+ * event timestamps; FREE_TEXT needs a night date (prose has none).
  */
 export function IngestPanel({
   hotelId,
@@ -15,8 +16,8 @@ export function IngestPanel({
   hotelId: string;
   onIngested: () => void;
 }) {
-  const [nightOf, setNightOf] = useState('2026-05-25');
   const [format, setFormat] = useState<'STRUCTURED' | 'FREE_TEXT'>('STRUCTURED');
+  const [nightOf, setNightOf] = useState('2026-05-27');
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -27,12 +28,14 @@ export function IngestPanel({
     try {
       const r = await api.ingest({
         hotelId,
-        nightOf,
-        startsAt: `${nightOf}T23:00:00+08:00`,
-        endsAt: `${nightOf}T07:00:00+08:00`,
+        ...(format === 'FREE_TEXT' ? { nightOf } : {}),
         sources: [{ format, content }],
       });
-      setResult(`Ingested ${r.events} events into shift ${r.shiftId}.`);
+      const total = r.shifts.reduce((n, s) => n + s.events, 0);
+      setResult(
+        `Ingested ${total} events across ${r.shifts.length} shift(s): ` +
+          r.shifts.map((s) => `${s.nightOf} (${s.events})`).join(', '),
+      );
       setContent('');
       onIngested();
     } catch (e) {
@@ -46,15 +49,6 @@ export function IngestPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-sm">
-          <span className="mb-1 block text-muted-foreground">Night of (start date)</span>
-          <input
-            type="date"
-            value={nightOf}
-            onChange={(e) => setNightOf(e.target.value)}
-            className="rounded-md border bg-background px-2 py-1"
-          />
-        </label>
-        <label className="text-sm">
           <span className="mb-1 block text-muted-foreground">Format</span>
           <select
             value={format}
@@ -65,7 +59,23 @@ export function IngestPanel({
             <option value="FREE_TEXT">FREE_TEXT (prose)</option>
           </select>
         </label>
+        {format === 'FREE_TEXT' && (
+          <label className="text-sm">
+            <span className="mb-1 block text-muted-foreground">Night of (start date)</span>
+            <input
+              type="date"
+              value={nightOf}
+              onChange={(e) => setNightOf(e.target.value)}
+              className="rounded-md border bg-background px-2 py-1"
+            />
+          </label>
+        )}
       </div>
+      {format === 'STRUCTURED' && (
+        <p className="text-xs text-muted-foreground">
+          Shift date(s) are derived from the event timestamps — no date needed.
+        </p>
+      )}
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
@@ -79,7 +89,7 @@ export function IngestPanel({
       />
       <div className="flex items-center gap-3">
         <Button onClick={submit} disabled={busy || content.trim().length === 0}>
-          {busy ? 'Ingesting…' : 'Ingest shift'}
+          {busy ? 'Ingesting…' : 'Ingest'}
         </Button>
         {result && <span className="text-sm text-muted-foreground">{result}</span>}
       </div>

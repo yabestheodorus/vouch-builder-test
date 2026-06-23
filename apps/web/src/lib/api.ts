@@ -12,8 +12,19 @@ export interface HandoverItem {
   reconcileTag: ReconcileTag;
   issueId: string | null;
   text: string;
+  why: string;
   sourceRefs: string[];
   flags: string[];
+}
+
+export interface ResolvedSource {
+  ref: string;
+  text: string;
+  room: string | null;
+  occurredAt: string | null;
+  category: string;
+  format: 'STRUCTURED' | 'FREE_TEXT';
+  nightOf: string | null;
 }
 
 export interface Handover {
@@ -25,6 +36,8 @@ export interface Handover {
   promptVersion: string;
   summary: string | null;
   items: HandoverItem[];
+  // ref -> raw source text, for clickable citations
+  sources: Record<string, ResolvedSource>;
 }
 
 export interface HandoverSummary {
@@ -64,10 +77,19 @@ export interface GenerationLog {
 
 export interface IngestPayload {
   hotelId: string;
-  nightOf: string;
-  startsAt: string;
-  endsAt: string;
+  // Required only for FREE_TEXT; STRUCTURED derives dates from the data.
+  nightOf?: string;
   sources: Array<{ format: 'STRUCTURED' | 'FREE_TEXT'; content: string }>;
+}
+
+export interface IngestResult {
+  hotelId: string;
+  shifts: Array<{
+    shiftId: string;
+    nightOf: string;
+    format: 'STRUCTURED' | 'FREE_TEXT';
+    events: number;
+  }>;
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
@@ -107,8 +129,13 @@ export const api = {
       `/hotels/${encodeURIComponent(hotelId)}/generation-logs`,
     ),
   ingest: (payload: IngestPayload) =>
-    http<{ shiftId: string; events: number }>(`/ingest`, {
+    http<IngestResult>(`/ingest`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  clearHotel: (hotelId: string) =>
+    http<{ hotelId: string; cleared: true }>(
+      `/hotels/${encodeURIComponent(hotelId)}/data`,
+      { method: 'DELETE' },
+    ),
 };
